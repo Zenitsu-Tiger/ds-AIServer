@@ -1,4 +1,4 @@
-import Koa from "koa";
+import Koa, { Context, Next } from "koa";
 import Router from "@koa/router";
 import cors from "@koa/cors";
 import { PassThrough } from "stream";
@@ -37,7 +37,7 @@ async function connectRedis() {
   // 使用环境变量中的 URL 创建 Redis 客户端
   redisClient = createClient({ url: process.env.REDIS_URL });
   // 监听连接错误事件
-  redisClient.on("error", err => console.error("Redis Client Error", err));
+  redisClient.on("error", (err: Error) => console.error("Redis Client Error", err));
   try {
     // 尝试连接 Redis
     await redisClient.connect();
@@ -51,8 +51,12 @@ async function connectRedis() {
 // connectRedis(); // 如果需要使用 Redis，取消此行注释以在启动时连接
 // ------------------------
 
+interface RequestWithBody extends Context {
+  request: Koa.Request & { body: { prompt?: string } };
+}
+
 // 定义 POST /chat 路由，用于处理聊天请求
-router.post("/chat", async ctx => {
+router.post("/chat", async (ctx: RequestWithBody) => {
   // 检查 API 密钥是否已配置
   if (!deepSeekApiKey) {
     ctx.status = 500; // 服务器内部错误状态码
@@ -60,13 +64,8 @@ router.post("/chat", async ctx => {
     return;
   }
 
-  // 从请求体中解析 prompt (用户输入)
-  // 注意: Koa 默认不解析 Body，需要像下面 app.use 中那样添加中间件来处理
-  let prompt: string | undefined;
-  if (ctx.request.body && typeof ctx.request.body === 'object' && 'prompt' in ctx.request.body) {
-      prompt = (ctx.request.body as { prompt?: string }).prompt;
-  }
-
+  // 从请求体中获取 prompt (用户输入)
+  const { prompt } = ctx.request.body;
 
   // 检查 prompt 是否存在
   if (!prompt) {
@@ -256,14 +255,14 @@ router.post("/chat", async ctx => {
 // --- Koa 应用设置 ---\n
 app
   .use(cors()) // 使用 CORS 中间件，允许跨域请求 (开发时通常需要)
-  .use(async (ctx, next) => {
+  .use(async (ctx: Context, next: Next) => {
     // --- 自定义简易 JSON Body Parser 中间件 ---
     // 仅当请求是 POST 且 Content-Type 是 application/json 时处理
     if (ctx.is("application/json") && ctx.request.method === "POST") {
       try {
         await new Promise<void>((resolve, reject) => {
           let data = ""; // 用于累积请求体数据
-          ctx.req.on("data", chunk => (data += chunk)); // 监听原生请求对象的 data 事件
+          ctx.req.on("data", (chunk: Buffer) => (data += chunk.toString())); // 监听原生请求对象的 data 事件
           ctx.req.on("end", () => { // 监听原生请求对象的 end 事件
             try {
               // 解析累积的 JSON 字符串，并将其挂载到 Koa 的 ctx.request.body 上
@@ -277,7 +276,7 @@ app
               resolve(); // 但仍然 resolve Promise 以结束等待
             }
           });
-          ctx.req.on("error", err => {
+          ctx.req.on("error", (err: Error) => {
             console.error("Request body stream error:", err);
             ctx.status = 500;
             ctx.body = { error: "Error reading request body" };
